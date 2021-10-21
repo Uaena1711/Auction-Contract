@@ -27,7 +27,7 @@ pragma solidity >=0.4.22 <0.9.0;
 
 import "./OwnAble.sol";
 
-contract Pausable is Context, Ownable {
+abstract contract PausAble is Context, Ownable {
   /**
      * @dev Emitted when the pause is triggered by `account`.
      */
