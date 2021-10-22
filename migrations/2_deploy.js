@@ -1,5 +1,8 @@
 const Auction = artifacts.require("NFTAuction");
+const library  = artifacts.require("IterableOrderedOrderSet")
 
-module.exports = function (deployer) {
-  deployer.deploy(Auction);
+module.exports = async function (deployer) {
+  await deployer.deploy(library);
+  await deployer.link(library, Auction);
+  await deployer.deploy(Auction);
 };
