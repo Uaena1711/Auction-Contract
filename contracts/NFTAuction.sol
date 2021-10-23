@@ -44,11 +44,15 @@ contract NFTAuction is PausAble {
         uint8 minBidIncrementPerOrder
     );
 
-    event NewSellOrder(
+    event NewBid(
         uint256 indexed auctionId,
-        uint64 indexed userId,
-        uint96 buyAmount,
-        uint96 sellAmount
+        address indexed userAddress,
+        uint256 buyAmount
+    );
+
+    event CancellationBid(
+        uint256 indexed auctionId,
+        address  userAddress
     );
 
     struct Auction {
@@ -84,7 +88,6 @@ contract NFTAuction is PausAble {
         /**
      * @notice Create an auction.
      * @dev Store the auction details in the auctions mapping and emit an AuctionCreated event.
-     * If there is no curator, or if the curator is the auction creator, automatically approve the auction.
      */
     function createAuction(
         uint256 tokenId,
@@ -101,9 +104,24 @@ contract NFTAuction is PausAble {
         );
 
         address tokenOwner = IERC721(tokenContract).ownerOf(tokenId);
-        require(msg.sender == IERC721(tokenContract).getApproved(tokenId) || msg.sender == tokenOwner, "Caller must be approved or owner for token id");
-        uint256 auctionId = _auctionIdTracker.current();
 
+        require(
+            msg.sender == IERC721(tokenContract).getApproved(tokenId) ||
+            msg.sender == tokenOwner,
+            "Caller must be approved or owner for token id"
+        );
+
+        require(
+            reservePrice > 0,
+            'Can not open an auction with 0 value at the first time'
+        );
+
+        require(
+            minBidIncrementPerOrder > 0,
+            'Can not open an auction with 0 increment per order'
+        );
+
+        uint256 auctionId = _auctionIdTracker.current();
         sellOrders[auctionId].initializeEmptyList();
 
         auctionData[auctionId] = Auction (
@@ -143,7 +161,8 @@ contract NFTAuction is PausAble {
     whenNotPaused
     auctionExists(auctionId)
     returns(bool) {
-        require(msg.sender != auctionData[auctionId].tokenOwner , "A user can not bid their own Auction");
+
+        require(msg.sender != auctionData[auctionId].tokenOwner, "A user can not bid their own Auction");
         require(auctionData[auctionId].approved, 'Auction must be approved by owner');
         require(block.timestamp <
                 auctionData[auctionId].start_time.add(auctionData[auctionId].duration),
@@ -179,10 +198,71 @@ contract NFTAuction is PausAble {
                 amount
             );
 
+            emit NewBid(
+                auctionId,
+                msg.sender,
+                amount
+            );
+
             return true;
         }
 
         return false;
+    }
+
+    function cancelBid(uint256 auctionId, uint96 amount)
+    public
+    whenNotPaused
+    auctionExists(auctionId)
+    returns(bool) {
+
+        bytes32 _order = IterableOrderedOrderSet.encodeOrder(msg.sender, amount);
+        bool success = sellOrders[auctionId].removeKeepHistory(_order);
+        if(success) {
+            (
+                address _userAddress,
+                uint96 _amount
+            ) = _order.decodeOrder();
+
+            require(_userAddress == msg.sender, 'Only the user can cancel their orders');
+
+            auctionData[auctionId].ERC20Address.transfer(
+                msg.sender,
+                _amount
+            );
+
+            emit CancellationBid(
+                auctionId,
+                msg.sender
+            );
+
+            return true;
+        }
+
+        return false;
+    }
+
+    function cancelAllBid(uint256 auctionId)
+    external
+    whenNotPaused
+    auctionExists(auctionId)
+    returns(bool) {
+        bytes32 _last_element = auctionData[auctionId].last_element;
+
+        while(_last_element != IterableOrderedOrderSet.QUEUE_START) {
+            (
+                address _userAddress,
+                uint96 _amount
+            ) = _last_element.decodeOrder();
+
+            if(msg.sender == _userAddress) {
+                cancelBid(auctionId, _amount);
+            }
+
+            _last_element = sellOrders[auctionId].prev(_last_element);
+        }
+
+        return true;
     }
 
     function _exists(uint256 auctionId) internal view returns(bool) {

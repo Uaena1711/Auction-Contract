@@ -114,7 +114,7 @@ library IterableOrderedOrderSet {
         self.nextMap[previousElement] = nextElement;
         self.prevMap[nextElement] = previousElement;
         self.nextMap[elementToRemove] = bytes32(0);
-        
+
         return true;
     }
 
@@ -163,7 +163,7 @@ library IterableOrderedOrderSet {
             address userIdRight,
             uint96 buyAmountRight
         ) = decodeOrder(orderRight);
-        
+
         if (buyAmountLeft < buyAmountRight && userIdLeft != userIdRight ) return true;
 
         return false;
@@ -187,19 +187,19 @@ library IterableOrderedOrderSet {
         );
         return nextElement;
     }
-    
+
     function prev(Data storage self, bytes32 value)
         internal
         view
         returns (bytes32)
     {
-         require(value != QUEUE_START, "Trying to get prev of first element");
-         bytes32 prevElement = self.prevMap[value];
-         require(
+        require(value != QUEUE_START, "Trying to get prev of first element");
+        bytes32 prevElement = self.prevMap[value];
+        require(
             prevElement != bytes32(0),
             "Trying to get prev of non-existent element"
         );
-        
+
         return prevElement;
     }
 
