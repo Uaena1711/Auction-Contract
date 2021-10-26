@@ -39,6 +39,7 @@ contract NFTAuction is PausAble {
         uint256 indexed tokenId,
         address indexed tokenContract,
         uint256 duration,
+        bool approved,
         uint256 reservePrice,
         address tokenOwner,
         uint8 minBidIncrementPerOrder
@@ -52,7 +53,21 @@ contract NFTAuction is PausAble {
 
     event CancellationBid(
         uint256 indexed auctionId,
-        address  userAddress
+        address  cancelledBy
+    );
+
+    event AuctionApprovalUpdated(
+        uint256 indexed auctionId,
+        uint256 indexed tokenId,
+        address indexed tokenContract,
+        bool approved
+    );
+
+    event AuctionCanceled(
+        uint256 indexed auctionId,
+        uint256 indexed tokenId,
+        address indexed tokenContract,
+        address tokenOwner
     );
 
     struct Auction {
@@ -84,6 +99,8 @@ contract NFTAuction is PausAble {
 
     mapping(uint256 => IterableOrderedOrderSet.Data) internal sellOrders;
     mapping(uint256 => Auction) public auctionData;
+
+    constructor() public PausAble {}
 
         /**
      * @notice Create an auction.
@@ -148,6 +165,7 @@ contract NFTAuction is PausAble {
             tokenId,
             tokenContract,
             duration,
+            approved,
             reservePrice,
             tokenOwner,
             minBidIncrementPerOrder
@@ -198,11 +216,7 @@ contract NFTAuction is PausAble {
                 amount
             );
 
-            emit NewBid(
-                auctionId,
-                msg.sender,
-                amount
-            );
+            emit NewBid(auctionId, msg.sender, amount);
 
             return true;
         }
@@ -210,11 +224,23 @@ contract NFTAuction is PausAble {
         return false;
     }
 
+    /**
+     * @notice Cancel a bid of an auction.
+     * @dev Only callable by the who createBid. Can on;y be called if the auction still open.
+     */
+
     function cancelBid(uint256 auctionId, uint96 amount)
     public
     whenNotPaused
     auctionExists(auctionId)
     returns(bool) {
+
+        require(auctionData[auctionId].approved, 'Auction must be approved by owner');
+
+        require(auctionData[auctionId].start_time < block.timestamp &&
+        auctionData[auctionId].start_time.add(auctionData[auctionId].duration) > block.timestamp
+        , 'Only the user can cancel their orders and cancel when auction still open'
+        );
 
         bytes32 _order = IterableOrderedOrderSet.encodeOrder(msg.sender, amount);
         bool success = sellOrders[auctionId].removeKeepHistory(_order);
@@ -231,10 +257,7 @@ contract NFTAuction is PausAble {
                 _amount
             );
 
-            emit CancellationBid(
-                auctionId,
-                msg.sender
-            );
+            emit CancellationBid(auctionId, msg.sender);
 
             return true;
         }
@@ -242,8 +265,13 @@ contract NFTAuction is PausAble {
         return false;
     }
 
+    /**
+     * @notice Cancel all user bid of an auction.
+     * @dev Only callable by the who createBid. Can only be called if the auction still open.
+     */
+
     function cancelAllBid(uint256 auctionId)
-    external
+    public
     whenNotPaused
     auctionExists(auctionId)
     returns(bool) {
@@ -263,6 +291,96 @@ contract NFTAuction is PausAble {
         }
 
         return true;
+    }
+
+    /**
+     * @notice Approve an auction, opening up the auction for bids.
+     * @dev Only callable by the curator. Cannot be called if the auction has already started.
+     */
+    function setAuctionApproval(uint256 auctionId, bool approved)
+    external
+    whenNotPaused
+    auctionExists(auctionId) {
+        require(msg.sender == auctionData[auctionId].tokenOwner, "Must be auction owner");
+        require(auctionData[auctionId].approved == false, "Auction hasn't started yet");
+        _approveAuction(auctionId, approved);
+    }
+
+    /**
+     * @notice Set duration for an auction, only when auction haven't start.
+     * @dev Only callable by the curator. Cannot be called if the auction has already started.
+     */
+    function setAuctionDuration(uint256 auctionId, uint256 duration)
+    external
+    whenNotPaused
+    auctionExists(auctionId) {
+        require(msg.sender == auctionData[auctionId].tokenOwner, "Must be auction owner");
+        require(auctionData[auctionId].approved == false, "Auction hasn't started yet");
+        _setDurationAuction(auctionId, duration);
+    }
+
+
+    /**
+     * @notice Cancel an auction when it haven't started yet.
+     * @dev Transfers the NFT back to the auction creator and emits an AuctionCanceled event
+     */
+    function cancelAuctionWhenNotStart(uint256 auctionId)
+    external
+    whenNotPaused
+    auctionExists(auctionId) {
+        require(
+            auctionData[auctionId].tokenOwner == msg.sender,
+            "Can only be called by auction creator"
+        );
+        require(
+            auctionData[auctionId].approved == false,
+            "Can't cancel an auction when it haven't been started yet with this method"
+        );
+
+        _cancelAuction(auctionId);
+    }
+
+    /**
+     * @notice Cancel an auction when it's ongoing.
+     * @dev Transfers the NFT back to the auction creator, trans back ERC20 token for bidder and emits an AuctionCanceled event
+     */
+    function cancelAuctionWhenOngoing(uint256 auctionId)
+    external
+    whenNotPaused
+    auctionExists(auctionId) {
+        require(
+            auctionData[auctionId].tokenOwner == msg.sender,
+            "Can only be called by auction creator"
+        );
+        require(
+            auctionData[auctionId].approved == true,
+            "Can't cancel an auction once it's begun with this method"
+        );
+
+        cancelAllBid(auctionId);
+
+        _cancelAuction(auctionId);
+    }
+
+    function _cancelAuction(uint256 auctionId)
+    internal {
+        address tokenOwner = auctionData[auctionId].tokenOwner;
+        IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(address(this), tokenOwner, auctions[auctionId].tokenId);
+
+        emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
+        delete auctionData[auctionId];
+    }
+
+    function _setDurationAuction(uint256 auctionId, uint256 duration)
+    internal {
+        auctionData[auctionId].duration = duration;
+    }
+
+    function _approveAuction(uint256 auctionId, bool approved)
+    internal {
+        auctionData[auctionId].approved = approved;
+        auctionData[auctionId].start_time = block.timestamp;
+        emit AuctionApprovalUpdated(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, approved);
     }
 
     function _exists(uint256 auctionId) internal view returns(bool) {
