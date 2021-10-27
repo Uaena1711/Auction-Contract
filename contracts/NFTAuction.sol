@@ -29,8 +29,17 @@ contract NFTAuction is PausAble {
     Counters.Counter private _auctionIdTracker;
 
     modifier auctionExists(uint256 auctionId) {
-    require(_exists(auctionId), "Auction doesn't exist");
-        _;
+        require(_exists(auctionId), "Auction doesn't exist");
+            _;
+    }
+
+    modifier OnGoingAuctionRequired(uint256 auctionId) {
+        require(auctionData[auctionId].approved, 'Auction must be approved by owner');
+
+        require(auctionData[auctionId].start_time.add(auctionData[auctionId].duration) > block.timestamp,
+            'Auction expired'
+        );
+            _;
     }
 
 
@@ -49,6 +58,10 @@ contract NFTAuction is PausAble {
         uint256 indexed auctionId,
         address indexed userAddress,
         uint256 buyAmount
+    );
+
+    event ForceCancelAuction (
+        uint256 indexed auctionId
     );
 
     event CancellationBid(
@@ -100,7 +113,7 @@ contract NFTAuction is PausAble {
     mapping(uint256 => IterableOrderedOrderSet.Data) internal sellOrders;
     mapping(uint256 => Auction) public auctionData;
 
-    constructor() public PausAble {}
+    constructor() public PausAble() {}
 
         /**
      * @notice Create an auction.
@@ -178,14 +191,10 @@ contract NFTAuction is PausAble {
     external
     whenNotPaused
     auctionExists(auctionId)
+    OnGoingAuctionRequired(auctionId)
     returns(bool) {
 
         require(msg.sender != auctionData[auctionId].tokenOwner, "A user can not bid their own Auction");
-        require(auctionData[auctionId].approved, 'Auction must be approved by owner');
-        require(block.timestamp <
-                auctionData[auctionId].start_time.add(auctionData[auctionId].duration),
-                'Auction expired'
-        );
 
         require(
             amount >= auctionData[auctionId].reservePrice,
@@ -233,36 +242,19 @@ contract NFTAuction is PausAble {
     public
     whenNotPaused
     auctionExists(auctionId)
+    OnGoingAuctionRequired(auctionId)
     returns(bool) {
 
-        require(auctionData[auctionId].approved, 'Auction must be approved by owner');
-
-        require(auctionData[auctionId].start_time < block.timestamp &&
-        auctionData[auctionId].start_time.add(auctionData[auctionId].duration) > block.timestamp
-        , 'Only the user can cancel their orders and cancel when auction still open'
-        );
-
         bytes32 _order = IterableOrderedOrderSet.encodeOrder(msg.sender, amount);
-        bool success = sellOrders[auctionId].removeKeepHistory(_order);
-        if(success) {
-            (
-                address _userAddress,
-                uint96 _amount
-            ) = _order.decodeOrder();
 
-            require(_userAddress == msg.sender, 'Only the user can cancel their orders');
-
-            auctionData[auctionId].ERC20Address.transfer(
-                msg.sender,
-                _amount
-            );
+        if(_cancelBid(auctionId, _order)) {
 
             emit CancellationBid(auctionId, msg.sender);
-
             return true;
         }
 
-        return false;
+        revert('cannot remove orders, check order info again');
+
     }
 
     /**
@@ -274,17 +266,24 @@ contract NFTAuction is PausAble {
     public
     whenNotPaused
     auctionExists(auctionId)
+    OnGoingAuctionRequired(auctionId)
     returns(bool) {
+
         bytes32 _last_element = auctionData[auctionId].last_element;
 
         while(_last_element != IterableOrderedOrderSet.QUEUE_START) {
             (
                 address _userAddress,
-                uint96 _amount
+
             ) = _last_element.decodeOrder();
 
             if(msg.sender == _userAddress) {
-                cancelBid(auctionId, _amount);
+
+                bool _success = _cancelBid(auctionId, _last_element);
+
+                if(_success) emit CancellationBid(auctionId, msg.sender);
+                else revert('cannot remove orders, check order info again');
+
             }
 
             _last_element = sellOrders[auctionId].prev(_last_element);
@@ -347,25 +346,23 @@ contract NFTAuction is PausAble {
     function cancelAuctionWhenOngoing(uint256 auctionId)
     external
     whenNotPaused
-    auctionExists(auctionId) {
+    auctionExists(auctionId)
+    OnGoingAuctionRequired(auctionId) {
         require(
             auctionData[auctionId].tokenOwner == msg.sender,
             "Can only be called by auction creator"
         );
-        require(
-            auctionData[auctionId].approved == true,
-            "Can't cancel an auction once it's begun with this method"
-        );
 
-        cancelAllBid(auctionId);
+        bool _success = _forceCancelAllBid(auctionId);
 
+        if(!_success) revert('Bid order to remove has wrong infomation');
         _cancelAuction(auctionId);
     }
 
     function _cancelAuction(uint256 auctionId)
     internal {
         address tokenOwner = auctionData[auctionId].tokenOwner;
-        IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(address(this), tokenOwner, auctions[auctionId].tokenId);
+        IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(address(this), tokenOwner, auctionData[auctionId].tokenId);
 
         emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
         delete auctionData[auctionId];
@@ -383,7 +380,65 @@ contract NFTAuction is PausAble {
         emit AuctionApprovalUpdated(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, approved);
     }
 
-    function _exists(uint256 auctionId) internal view returns(bool) {
+    function _exists(uint256 auctionId)
+    internal
+    view
+    returns(bool) {
         return auctionData[auctionId].tokenOwner != address(0);
+    }
+
+    function _cancelBid(uint256 auctionId, bytes32 _orderInfo)
+    internal
+    returns(bool) {
+
+        bool success = sellOrders[auctionId].removeKeepHistory(_orderInfo);
+        if(success) {
+            (
+                address _userAddress,
+                uint96 _amount
+            ) = _orderInfo.decodeOrder();
+
+            require(_userAddress == msg.sender, 'Only the user can cancel their orders');
+
+            auctionData[auctionId].ERC20Address.transfer(
+                msg.sender,
+                _amount
+            );
+
+            return true;
+        }
+
+        return false;
+    }
+
+    function _forceCancelAllBid(uint256 auctionId)
+    internal
+    returns(bool) {
+
+        bytes32 _last_element = auctionData[auctionId].last_element;
+
+        while(_last_element != IterableOrderedOrderSet.QUEUE_START) {
+            (
+                address _userAddress,
+                uint96 _amount
+            ) = _last_element.decodeOrder();
+
+            bool _success = sellOrders[auctionId].removeKeepHistory(_last_element);
+
+            if(_success)  {
+
+                auctionData[auctionId].ERC20Address.transfer(
+                    _userAddress,
+                    _amount
+                );
+
+                emit CancellationBid(auctionId, msg.sender);
+                return true;
+            }
+
+            _last_element = sellOrders[auctionId].prev(_last_element);
+        }
+
+        return false;
     }
 }
