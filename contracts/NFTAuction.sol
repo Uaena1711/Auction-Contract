@@ -364,8 +364,8 @@ contract NFTAuction is PausAble {
         address tokenOwner = auctionData[auctionId].tokenOwner;
         IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(address(this), tokenOwner, auctionData[auctionId].tokenId);
 
-        emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
         delete auctionData[auctionId];
+        emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
     }
 
     function _setDurationAuction(uint256 auctionId, uint256 duration)
@@ -392,6 +392,7 @@ contract NFTAuction is PausAble {
     returns(bool) {
 
         bool success = sellOrders[auctionId].removeKeepHistory(_orderInfo);
+        bytes32 _last_element = auctionData[auctionId].last_element;
         if(success) {
             (
                 address _userAddress,
@@ -399,6 +400,18 @@ contract NFTAuction is PausAble {
             ) = _orderInfo.decodeOrder();
 
             require(_userAddress == msg.sender, 'Only the user can cancel their orders');
+
+            if(_orderInfo == _last_element) {
+                auctionData[auctionId].last_element = sellOrders[auctionId].prev(_last_element);
+
+                (
+                    address _currentAddress,
+                    uint96 _currentAmount
+                ) = auctionData[auctionId].last_element.decodeOrder();
+
+                auctionData[auctionId].bidder = _currentAddress;
+                auctionData[auctionId].amount = _currentAmount;
+            }
 
             auctionData[auctionId].ERC20Address.transfer(
                 msg.sender,
@@ -415,6 +428,7 @@ contract NFTAuction is PausAble {
     internal
     returns(bool) {
 
+        bool isDone = true;
         bytes32 _last_element = auctionData[auctionId].last_element;
 
         while(_last_element != IterableOrderedOrderSet.QUEUE_START) {
@@ -433,12 +447,15 @@ contract NFTAuction is PausAble {
                 );
 
                 emit CancellationBid(auctionId, msg.sender);
-                return true;
+
+            }
+            else {
+                isDone = false;
             }
 
             _last_element = sellOrders[auctionId].prev(_last_element);
         }
 
-        return false;
+        return isDone;
     }
 }
