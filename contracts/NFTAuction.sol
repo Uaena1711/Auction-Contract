@@ -26,6 +26,8 @@ contract NFTAuction is PausAble {
 
     bytes32 internal init_last_element = 0x0000000000000000000000000000000000000000000000000000000000000001; // first data in queue
 
+    uint256 constant FEE_DENOMINATOR = 1000;
+
     Counters.Counter private _auctionIdTracker;
 
     modifier auctionExists(uint256 auctionId) {
@@ -83,6 +85,12 @@ contract NFTAuction is PausAble {
         address tokenOwner
     );
 
+    event AuctionEnded(
+        uint256 indexed auctionId,
+        address indexed winner,
+        uint256 indexed winAmount
+    );
+
     struct Auction {
         // ID for the ERC721 token
         uint256 tokenId;
@@ -110,12 +118,39 @@ contract NFTAuction is PausAble {
         uint96 amount;
     }
 
-    mapping(uint256 => IterableOrderedOrderSet.Data) internal sellOrders;
+    uint256 feeNumerator;
+    address public feeTo;
     mapping(uint256 => Auction) public auctionData;
+    mapping(uint256 => IterableOrderedOrderSet.Data) internal sellOrders;
 
     constructor() public PausAble() {}
 
-        /**
+    /**
+     * @notice Auction owner must pay some fee for this contract owner, and this fee will be send to this address
+     * @dev set feeTo address, can only call by owner, if feeTo = address(0) => free
+     */
+    function setFeeTo(address _feeTo)
+    external
+    onlyOwner {
+        feeTo = _feeTo;
+    }
+
+    /**
+     * @notice Auction owner must pay some fee for this contract owner
+     * @dev set feeTo address, can only call by owner
+     */
+    function setFeeParameters(uint256 newFeeNumerator)
+    public
+    onlyOwner {
+        require(
+            newFeeNumerator <= 15,
+            "Fee is not allowed to be set higher than 1.5%"
+        );
+
+        feeNumerator = newFeeNumerator;
+    }
+
+    /**
      * @notice Create an auction.
      * @dev Store the auction details in the auctions mapping and emit an AuctionCreated event.
      */
@@ -359,12 +394,75 @@ contract NFTAuction is PausAble {
         _cancelAuction(auctionId);
     }
 
+    /**
+     * @notice Call when auction ended to exhange ERC20 and ERC721 between auction creator and auction winner .
+     * @dev Transfers the NFT to the auction winner, trans ERC20 token for auction owner and return alll ERC20 for lost users
+     */
+    function endAuction(uint256 auctionId)
+    external
+    whenNotPaused
+    auctionExists(auctionId)
+    {
+        require(
+            auctionData[auctionId].tokenOwner == msg.sender ||
+            (_tooLongAuction(auctionId) && isOwner()) ,
+            "Not authorized"
+        );
+
+        require(
+            auctionData[auctionId].approved == true,
+            "Auction haven't started"
+        );
+
+        require(
+            auctionData[auctionId].start_time.add(auctionData[auctionId].duration) <= block.timestamp,
+            "Action haven't ended"
+        );
+
+        address winner = auctionData[auctionId].bidder;
+        address _tokenOwner = auctionData[auctionId].tokenOwner;
+        uint256 winAmount = auctionData[auctionId].amount;
+        bytes32 _last_element = auctionData[auctionId].last_element;
+
+        if(feeTo != address(0)) {
+            uint256 _fee = winAmount.mul(feeNumerator)
+                                    .div(FEE_DENOMINATOR);
+            winAmount = winAmount.sub(_fee);
+        }
+
+        auctionData[auctionId].ERC20Address.transfer(
+                _tokenOwner,
+                winAmount
+            );
+
+        IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(
+                address(this),
+                winner,
+                auctionData[auctionId].tokenId
+            );
+
+        // remove winner from pay back list
+        auctionData[auctionId].last_element = sellOrders[auctionId].prev(_last_element);
+
+        // pay back list: return ERC20 for lost bidder list
+        bool success = _forceCancelAllBid(auctionId);
+
+        if(!_success) revert('Bid order to remove has wrong infomation');
+
+        // delete auction informations
+        delete auctionData[auctionId];
+        delete sellOrders[auctionId];
+
+        emit AuctionEnded(auctionId, winner, winAmount);
+    }
+
     function _cancelAuction(uint256 auctionId)
     internal {
         address tokenOwner = auctionData[auctionId].tokenOwner;
         IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(address(this), tokenOwner, auctionData[auctionId].tokenId);
 
         delete auctionData[auctionId];
+        delete sellOrders[auctionId];
         emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
     }
 
@@ -378,6 +476,15 @@ contract NFTAuction is PausAble {
         auctionData[auctionId].approved = approved;
         auctionData[auctionId].start_time = block.timestamp;
         emit AuctionApprovalUpdated(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, approved);
+    }
+
+    function _tooLongAuction(uint256 auctionId)
+    internal
+    view
+    returns(bool) {
+        if(block.timestamp >= auctionData[auctionId].start_time.add(2592000)) return true;
+
+        return false;
     }
 
     function _exists(uint256 auctionId)
