@@ -29,8 +29,17 @@ contract NFTAuction is PausAble {
     Counters.Counter private _auctionIdTracker;
 
     modifier auctionExists(uint256 auctionId) {
-    require(_exists(auctionId), "Auction doesn't exist");
-        _;
+        require(_exists(auctionId), "Auction doesn't exist");
+            _;
+    }
+
+    modifier OnGoingAuctionRequired(uint256 auctionId) {
+        require(auctionData[auctionId].approved, 'Auction must be approved by owner');
+
+        require(auctionData[auctionId].start_time.add(auctionData[auctionId].duration) > block.timestamp,
+            'Auction expired'
+        );
+            _;
     }
 
 
@@ -39,16 +48,39 @@ contract NFTAuction is PausAble {
         uint256 indexed tokenId,
         address indexed tokenContract,
         uint256 duration,
+        bool approved,
         uint256 reservePrice,
         address tokenOwner,
         uint8 minBidIncrementPerOrder
     );
 
-    event NewSellOrder(
+    event NewBid(
         uint256 indexed auctionId,
-        uint64 indexed userId,
-        uint96 buyAmount,
-        uint96 sellAmount
+        address indexed userAddress,
+        uint256 buyAmount
+    );
+
+    event ForceCancelAuction (
+        uint256 indexed auctionId
+    );
+
+    event CancellationBid(
+        uint256 indexed auctionId,
+        address  cancelledBy
+    );
+
+    event AuctionApprovalUpdated(
+        uint256 indexed auctionId,
+        uint256 indexed tokenId,
+        address indexed tokenContract,
+        bool approved
+    );
+
+    event AuctionCanceled(
+        uint256 indexed auctionId,
+        uint256 indexed tokenId,
+        address indexed tokenContract,
+        address tokenOwner
     );
 
     struct Auction {
@@ -81,10 +113,11 @@ contract NFTAuction is PausAble {
     mapping(uint256 => IterableOrderedOrderSet.Data) internal sellOrders;
     mapping(uint256 => Auction) public auctionData;
 
+    constructor() public PausAble() {}
+
         /**
      * @notice Create an auction.
      * @dev Store the auction details in the auctions mapping and emit an AuctionCreated event.
-     * If there is no curator, or if the curator is the auction creator, automatically approve the auction.
      */
     function createAuction(
         uint256 tokenId,
@@ -101,9 +134,24 @@ contract NFTAuction is PausAble {
         );
 
         address tokenOwner = IERC721(tokenContract).ownerOf(tokenId);
-        require(msg.sender == IERC721(tokenContract).getApproved(tokenId) || msg.sender == tokenOwner, "Caller must be approved or owner for token id");
-        uint256 auctionId = _auctionIdTracker.current();
 
+        require(
+            msg.sender == IERC721(tokenContract).getApproved(tokenId) ||
+            msg.sender == tokenOwner,
+            "Caller must be approved or owner for token id"
+        );
+
+        require(
+            reservePrice > 0,
+            'Can not open an auction with 0 value at the first time'
+        );
+
+        require(
+            minBidIncrementPerOrder > 0,
+            'Can not open an auction with 0 increment per order'
+        );
+
+        uint256 auctionId = _auctionIdTracker.current();
         sellOrders[auctionId].initializeEmptyList();
 
         auctionData[auctionId] = Auction (
@@ -130,6 +178,7 @@ contract NFTAuction is PausAble {
             tokenId,
             tokenContract,
             duration,
+            approved,
             reservePrice,
             tokenOwner,
             minBidIncrementPerOrder
@@ -142,13 +191,10 @@ contract NFTAuction is PausAble {
     external
     whenNotPaused
     auctionExists(auctionId)
+    OnGoingAuctionRequired(auctionId)
     returns(bool) {
-        require(msg.sender != auctionData[auctionId].tokenOwner , "A user can not bid their own Auction");
-        require(auctionData[auctionId].approved, 'Auction must be approved by owner');
-        require(block.timestamp <
-                auctionData[auctionId].start_time.add(auctionData[auctionId].duration),
-                'Auction expired'
-        );
+
+        require(msg.sender != auctionData[auctionId].tokenOwner, "A user can not bid their own Auction");
 
         require(
             amount >= auctionData[auctionId].reservePrice,
@@ -179,13 +225,237 @@ contract NFTAuction is PausAble {
                 amount
             );
 
+            emit NewBid(auctionId, msg.sender, amount);
+
             return true;
         }
 
         return false;
     }
 
-    function _exists(uint256 auctionId) internal view returns(bool) {
+    /**
+     * @notice Cancel a bid of an auction.
+     * @dev Only callable by the who createBid. Can on;y be called if the auction still open.
+     */
+
+    function cancelBid(uint256 auctionId, uint96 amount)
+    public
+    whenNotPaused
+    auctionExists(auctionId)
+    OnGoingAuctionRequired(auctionId)
+    returns(bool) {
+
+        bytes32 _order = IterableOrderedOrderSet.encodeOrder(msg.sender, amount);
+
+        if(_cancelBid(auctionId, _order)) {
+
+            emit CancellationBid(auctionId, msg.sender);
+            return true;
+        }
+
+        revert('cannot remove orders, check order info again');
+
+    }
+
+    /**
+     * @notice Cancel all user bid of an auction.
+     * @dev Only callable by the who createBid. Can only be called if the auction still open.
+     */
+
+    function cancelAllBid(uint256 auctionId)
+    public
+    whenNotPaused
+    auctionExists(auctionId)
+    OnGoingAuctionRequired(auctionId)
+    returns(bool) {
+
+        bytes32 _last_element = auctionData[auctionId].last_element;
+
+        while(_last_element != IterableOrderedOrderSet.QUEUE_START) {
+            (
+                address _userAddress,
+
+            ) = _last_element.decodeOrder();
+
+            if(msg.sender == _userAddress) {
+
+                bool _success = _cancelBid(auctionId, _last_element);
+
+                if(_success) emit CancellationBid(auctionId, msg.sender);
+                else revert('cannot remove orders, check order info again');
+
+            }
+
+            _last_element = sellOrders[auctionId].prev(_last_element);
+        }
+
+        return true;
+    }
+
+    /**
+     * @notice Approve an auction, opening up the auction for bids.
+     * @dev Only callable by the curator. Cannot be called if the auction has already started.
+     */
+    function setAuctionApproval(uint256 auctionId, bool approved)
+    external
+    whenNotPaused
+    auctionExists(auctionId) {
+        require(msg.sender == auctionData[auctionId].tokenOwner, "Must be auction owner");
+        require(auctionData[auctionId].approved == false, "Auction hasn't started yet");
+        _approveAuction(auctionId, approved);
+    }
+
+    /**
+     * @notice Set duration for an auction, only when auction haven't start.
+     * @dev Only callable by the curator. Cannot be called if the auction has already started.
+     */
+    function setAuctionDuration(uint256 auctionId, uint256 duration)
+    external
+    whenNotPaused
+    auctionExists(auctionId) {
+        require(msg.sender == auctionData[auctionId].tokenOwner, "Must be auction owner");
+        require(auctionData[auctionId].approved == false, "Auction hasn't started yet");
+        _setDurationAuction(auctionId, duration);
+    }
+
+
+    /**
+     * @notice Cancel an auction when it haven't started yet.
+     * @dev Transfers the NFT back to the auction creator and emits an AuctionCanceled event
+     */
+    function cancelAuctionWhenNotStart(uint256 auctionId)
+    external
+    whenNotPaused
+    auctionExists(auctionId) {
+        require(
+            auctionData[auctionId].tokenOwner == msg.sender,
+            "Can only be called by auction creator"
+        );
+        require(
+            auctionData[auctionId].approved == false,
+            "Can't cancel an auction when it haven't been started yet with this method"
+        );
+
+        _cancelAuction(auctionId);
+    }
+
+    /**
+     * @notice Cancel an auction when it's ongoing.
+     * @dev Transfers the NFT back to the auction creator, trans back ERC20 token for bidder and emits an AuctionCanceled event
+     */
+    function cancelAuctionWhenOngoing(uint256 auctionId)
+    external
+    whenNotPaused
+    auctionExists(auctionId)
+    OnGoingAuctionRequired(auctionId) {
+        require(
+            auctionData[auctionId].tokenOwner == msg.sender,
+            "Can only be called by auction creator"
+        );
+
+        bool _success = _forceCancelAllBid(auctionId);
+
+        if(!_success) revert('Bid order to remove has wrong infomation');
+        _cancelAuction(auctionId);
+    }
+
+    function _cancelAuction(uint256 auctionId)
+    internal {
+        address tokenOwner = auctionData[auctionId].tokenOwner;
+        IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(address(this), tokenOwner, auctionData[auctionId].tokenId);
+
+        delete auctionData[auctionId];
+        emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
+    }
+
+    function _setDurationAuction(uint256 auctionId, uint256 duration)
+    internal {
+        auctionData[auctionId].duration = duration;
+    }
+
+    function _approveAuction(uint256 auctionId, bool approved)
+    internal {
+        auctionData[auctionId].approved = approved;
+        auctionData[auctionId].start_time = block.timestamp;
+        emit AuctionApprovalUpdated(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, approved);
+    }
+
+    function _exists(uint256 auctionId)
+    internal
+    view
+    returns(bool) {
         return auctionData[auctionId].tokenOwner != address(0);
+    }
+
+    function _cancelBid(uint256 auctionId, bytes32 _orderInfo)
+    internal
+    returns(bool) {
+
+        bool success = sellOrders[auctionId].removeKeepHistory(_orderInfo);
+        bytes32 _last_element = auctionData[auctionId].last_element;
+        if(success) {
+            (
+                address _userAddress,
+                uint96 _amount
+            ) = _orderInfo.decodeOrder();
+
+            require(_userAddress == msg.sender, 'Only the user can cancel their orders');
+
+            if(_orderInfo == _last_element) {
+                auctionData[auctionId].last_element = sellOrders[auctionId].prev(_last_element);
+
+                (
+                    address _currentAddress,
+                    uint96 _currentAmount
+                ) = auctionData[auctionId].last_element.decodeOrder();
+
+                auctionData[auctionId].bidder = _currentAddress;
+                auctionData[auctionId].amount = _currentAmount;
+            }
+
+            auctionData[auctionId].ERC20Address.transfer(
+                msg.sender,
+                _amount
+            );
+
+            return true;
+        }
+
+        return false;
+    }
+
+    function _forceCancelAllBid(uint256 auctionId)
+    internal
+    returns(bool) {
+
+        bool isDone = true;
+        bytes32 _last_element = auctionData[auctionId].last_element;
+
+        while(_last_element != IterableOrderedOrderSet.QUEUE_START) {
+            (
+                address _userAddress,
+                uint96 _amount
+            ) = _last_element.decodeOrder();
+
+            bool _success = sellOrders[auctionId].removeKeepHistory(_last_element);
+
+            if(_success)  {
+
+                auctionData[auctionId].ERC20Address.transfer(
+                    _userAddress,
+                    _amount
+                );
+
+                emit CancellationBid(auctionId, msg.sender);
+
+            }
+            else {
+                isDone = false;
+            }
+
+            _last_element = sellOrders[auctionId].prev(_last_element);
+        }
+
+        return isDone;
     }
 }
