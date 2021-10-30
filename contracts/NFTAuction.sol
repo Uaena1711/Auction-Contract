@@ -447,7 +447,7 @@ contract NFTAuction is PausAble {
         // pay back list: return ERC20 for lost bidder list
         bool success = _forceCancelAllBid(auctionId);
 
-        if(!_success) revert('Bid order to remove has wrong infomation');
+        if(!success) revert('Bid order to remove has wrong infomation');
 
         // delete auction informations
         delete auctionData[auctionId];
