@@ -11,7 +11,7 @@ import {Counters} from "@openzeppelin/contracts/utils/Counters.sol";
 
 pragma solidity >=0.4.22 <0.9.0;
 
-contract NFTAuction is PausAble {
+contract NFTAuction is Pausable {
 
     using SafeERC20 for IERC20;
     using SafeMath for uint64;
@@ -145,7 +145,7 @@ contract NFTAuction is PausAble {
     mapping(uint256 => Auction) public auctionData;
     mapping(uint256 => IterableOrderedOrderSet.Data) internal sellOrders;
 
-    constructor() public PausAble() {
+    constructor() public Pausable() {
     }
 
     /**
