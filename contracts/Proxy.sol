@@ -6,9 +6,15 @@ import "./OwnAble.sol";
 
 contract SampleProxy is Ownable {
     
-    constructor (address _logic) public payable  {
-      assert(_IMPLEMENTATION_SLOT == bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1));
+    constructor (address _logic, bytes memory _data) public payable  {
+        assert(_IMPLEMENTATION_SLOT == bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1));
         _setImplementation(_logic);
+
+        if(_data.length > 0) {
+            // solhint-disable-next-line avoid-low-level-calls
+            (bool success,) = _logic.delegatecall(_data);
+            require(success);
+        }
     }
     
     /**
@@ -51,11 +57,15 @@ contract SampleProxy is Ownable {
         }
     }
     
-    function upgradeToAndCall(address newImplementation, bytes calldata data) external payable {
+    function upgradeToAndCall(address newImplementation, bytes calldata data) external onlyOwner payable {
         _upgradeTo(newImplementation);
         // solhint-disable-next-line avoid-low-level-calls
         (bool success,) = newImplementation.delegatecall(data);
         require(success);
+    }
+
+    function upgrade(address newImplementation) external onlyOwner payable {
+        _upgradeTo(newImplementation);
     }
     
         /**

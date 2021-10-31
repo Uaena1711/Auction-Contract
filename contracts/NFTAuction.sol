@@ -22,11 +22,14 @@ contract NFTAuction is PausAble {
     using IterableOrderedOrderSet for bytes32;
     using Counters for Counters.Counter;
 
-    bytes4 constant interfaceId = 0x80ac58cd; // 721 interface id
+    bool private initialized;
+    bool private initializing;
 
-    bytes32 internal init_last_element = 0x0000000000000000000000000000000000000000000000000000000000000001; // first data in queue
+    bytes4 private interfaceId; // 721 interface id
 
-    uint256 constant FEE_DENOMINATOR = 1000;
+    uint256 private FEE_DENOMINATOR;
+
+    bytes32 private init_last_element; // first data in queue
 
     Counters.Counter private _auctionIdTracker;
 
@@ -44,6 +47,25 @@ contract NFTAuction is PausAble {
             _;
     }
 
+    /**
+   * @dev Modifier to use in the initializer function of a contract.
+   */
+    modifier initializer() {
+        require(initializing || !initialized, "Contract instance has already been initialized");
+
+        bool isTopLevelCall = !initializing;
+        if (isTopLevelCall) {
+            initializing = true;
+            initialized = true;
+        }
+
+        _;
+
+        if (isTopLevelCall) {
+            initializing = false;
+        }
+    }
+
 
     event AuctionCreated(
         uint256 indexed auctionId,
@@ -53,7 +75,7 @@ contract NFTAuction is PausAble {
         bool approved,
         uint256 reservePrice,
         address tokenOwner,
-        uint8 minBidIncrementPerOrder
+        uint256 minBidIncrementPerOrder
     );
 
     event NewBid(
@@ -109,7 +131,7 @@ contract NFTAuction is PausAble {
         // The minimum price of the first bid
         uint256 reservePrice;
         // The sale percentage to send to the curator
-        uint8 minBidIncrementPerOrder;
+        uint256 minBidIncrementPerOrder;
         // The address that should receive the funds once the NFT is sold.
         address tokenOwner;
         // The address of the current highest bid
@@ -123,7 +145,20 @@ contract NFTAuction is PausAble {
     mapping(uint256 => Auction) public auctionData;
     mapping(uint256 => IterableOrderedOrderSet.Data) internal sellOrders;
 
-    constructor() public PausAble() {}
+    constructor() public PausAble() {
+    }
+
+    /**
+     * @notice Call this function only 1 time to init value for variable
+     * @dev initializer confirm this function can't invoke more than one time
+     */
+    function initialize()
+    public
+    initializer {
+        interfaceId = 0x80ac58cd;
+        FEE_DENOMINATOR = 1000;
+        init_last_element = 0x0000000000000000000000000000000000000000000000000000000000000001;
+    }
 
     /**
      * @notice Auction owner must pay some fee for this contract owner, and this fee will be send to this address
@@ -161,7 +196,7 @@ contract NFTAuction is PausAble {
         uint256 duration,
         bool approved,
         uint256 reservePrice,
-        uint8 minBidIncrementPerOrder
+        uint256 minBidIncrementPerOrder
     ) public  whenNotPaused returns (uint256) {
         require(
             IERC165(tokenContract).supportsInterface(interfaceId),
@@ -461,9 +496,9 @@ contract NFTAuction is PausAble {
         address tokenOwner = auctionData[auctionId].tokenOwner;
         IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(address(this), tokenOwner, auctionData[auctionId].tokenId);
 
-        delete auctionData[auctionId];
-        delete sellOrders[auctionId];
         emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
+        delete sellOrders[auctionId];
+        delete auctionData[auctionId];
     }
 
     function _setDurationAuction(uint256 auctionId, uint256 duration)
