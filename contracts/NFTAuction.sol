@@ -458,13 +458,14 @@ contract NFTAuction is Pausable {
         address _tokenOwner = auctionData[auctionId].tokenOwner;
         uint256 winAmount = auctionData[auctionId].amount;
         bytes32 _last_element = auctionData[auctionId].last_element;
+        uint256 _fee = 0;
 
         if(feeTo != address(0)) {
-            uint256 _fee = winAmount.mul(feeNumerator)
-                                    .div(FEE_DENOMINATOR);
-            winAmount = winAmount.sub(_fee);
+            _fee = winAmount.mul(feeNumerator)
+                            .div(FEE_DENOMINATOR);
         }
 
+        winAmount = winAmount.sub(_fee);
         auctionData[auctionId].ERC20Address.transfer(
                 _tokenOwner,
                 winAmount
@@ -475,6 +476,13 @@ contract NFTAuction is Pausable {
                 winner,
                 auctionData[auctionId].tokenId
             );
+
+        if(_fee != 0) {
+            auctionData[auctionId].ERC20Address.transfer(
+                feeTo,
+                _fee
+            );
+        }
 
         // remove winner from pay back list
         auctionData[auctionId].last_element = sellOrders[auctionId].prev(_last_element);
