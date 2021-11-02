@@ -1,5 +1,6 @@
+require("dotenv").config();
+
 const HDWalletProvider = require('@truffle/hdwallet-provider');
-const privateKeys = ['YOUR PRIVATE KEY'];
 
 /**
  * Use this file to configure your truffle project. It's seeded with some
@@ -39,14 +40,15 @@ module.exports = {
 
   networks: {
 
-      testNet : {
+      evrynet : {
         provider: () => new HDWalletProvider(
-          privateKeys,
-          'http://3.0.202.137:8545'
+          process.env.EVRYNET_MNEMONIC,
+          process.env.EVRYNET_PROVIDER
         ),
-        network_id: 21,
-        skipDryRun: false
+        network_id: 45,
+        skipDryRun: true
       }
+      
     // Useful for testing. The `development` name is special - truffle uses it by default
     // if it's defined here and no other network is specified at the command line.
     // You should run a client (like ganache-cli, geth or parity) in a separate terminal

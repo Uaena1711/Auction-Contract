@@ -1,13 +1,13 @@
-// SPDX-License-Identifier: No 
+// SPDX-License-Identifier: No
 
 import "./PausAble.sol";
 import "../library/OrderAuctionList.sol";
 import "../library/SafeCast.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { IERC721, IERC165 } from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Counters} from "@openzeppelin/contracts/utils/Counters.sol";
+import "../node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IERC721, IERC165 } from "../node_modules/@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "../node_modules/@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "../node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Counters} from "../node_modules/@openzeppelin/contracts/utils/Counters.sol";
 
 pragma solidity >=0.4.22 <0.9.0;
 
@@ -454,11 +454,11 @@ contract NFTAuction is Pausable {
             "Action haven't ended"
         );
 
+        uint256 _fee;
         address winner = auctionData[auctionId].bidder;
         address _tokenOwner = auctionData[auctionId].tokenOwner;
         uint256 winAmount = auctionData[auctionId].amount;
         bytes32 _last_element = auctionData[auctionId].last_element;
-        uint256 _fee = 0;
 
         if(feeTo != address(0)) {
             _fee = winAmount.mul(feeNumerator)

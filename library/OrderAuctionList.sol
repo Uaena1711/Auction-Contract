@@ -4,7 +4,7 @@
 
 pragma solidity >=0.6.8;
 
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "../node_modules/@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 library IterableOrderedOrderSet {
     using SafeMath for uint96;

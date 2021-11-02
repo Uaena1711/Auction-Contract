@@ -1,0 +1,27 @@
+{
+  "name": "auction_contracts",
+  "version": "1.0.0",
+  "description": "Dependencies and scripts for smart contracts",
+  "main": "truffle.js",
+  "directories": {
+    "test": "test"
+  },
+  "author": "Hai Pham",
+  "license": "ISC",
+  "dependencies": {
+    "@openzeppelin/contracts-upgradeable": "^4.2.0",
+    "@openzeppelin/truffle-upgrades": "^1.8.0",
+    "@poanet/solidity-flattener": "^3.0.6",
+    "dotenv": "^8.1.0",
+    "openzeppelin-solidity": "^4.3.2"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "^4.2.0",
+    "@truffle/hdwallet-provider": "^1.0.43",
+    "truffle": "^5.4.3",
+    "truffle-plugin-verify": "^0.5.11",
+    "web3": "^1.2.6",
+    "web3-utils": "^1.0.0-beta.52"
+  },
+  "scripts": {}
+}

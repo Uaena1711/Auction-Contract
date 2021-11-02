@@ -5,9 +5,9 @@ A Project use block chain technology to create website which everyone can join, 
 # Run project
 
 1. Install package
-  - `npm i @truffle/hdwallet-provider`
-  - `cp truffle-config.example.js truffle-config.js`
-  - Enter your private key metamask 
+  - `npm i`
+  - `cp .env.example .env` to create enviroment file.
+  - Enter your private key metamask, your address, network RPC
 
 2. Compile
   - Install truffle: `npm install -g truffle`
