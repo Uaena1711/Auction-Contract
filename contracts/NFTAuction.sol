@@ -1,17 +1,18 @@
-// SPDX-License-Identifier: No
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 
 import "./PausAble.sol";
 import "../library/OrderAuctionList.sol";
 import "../library/SafeCast.sol";
+import "../library/ReentrancyGuard.sol";
 import "../node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC721, IERC165 } from "../node_modules/@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "../node_modules/@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "../node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Counters} from "../node_modules/@openzeppelin/contracts/utils/Counters.sol";
+import { Counters } from "../node_modules/@openzeppelin/contracts/utils/Counters.sol";
 
-pragma solidity >=0.4.22 <0.9.0;
 
-contract NFTAuction is Pausable {
+contract NFTAuction is ReentrancyGuard, Pausable {
 
     using SafeERC20 for IERC20;
     using SafeMath for uint64;
@@ -24,10 +25,10 @@ contract NFTAuction is Pausable {
 
     bool private initialized;
     bool private initializing;
+    uint16 private FEE_DENOMINATOR;
 
     bytes4 private interfaceId; // 721 interface id
 
-    uint256 private FEE_DENOMINATOR;
 
     bytes32 private init_last_element; // first data in queue
 
@@ -48,8 +49,8 @@ contract NFTAuction is Pausable {
     }
 
     /**
-   * @dev Modifier to use in the initializer function of a contract.
-   */
+    * @dev Modifier to use in the initializer function of a contract.
+    */
     modifier initializer() {
         require(initializing || !initialized, "Contract instance has already been initialized");
 
@@ -72,7 +73,7 @@ contract NFTAuction is Pausable {
         uint256 indexed tokenId,
         address indexed tokenContract,
         uint256 duration,
-        bool approved,
+        bool    approved,
         uint256 reservePrice,
         address tokenOwner,
         uint256 minBidIncrementPerOrder
@@ -90,21 +91,21 @@ contract NFTAuction is Pausable {
 
     event CancellationBid(
         uint256 indexed auctionId,
-        address  cancelledBy
+        address         cancelledBy
     );
 
     event AuctionApprovalUpdated(
         uint256 indexed auctionId,
         uint256 indexed tokenId,
         address indexed tokenContract,
-        bool approved
+        bool            approved
     );
 
     event AuctionCanceled(
         uint256 indexed auctionId,
         uint256 indexed tokenId,
         address indexed tokenContract,
-        address tokenOwner
+        address         tokenOwner
     );
 
     event AuctionEnded(
@@ -134,19 +135,24 @@ contract NFTAuction is Pausable {
         uint256 minBidIncrementPerOrder;
         // The address that should receive the funds once the NFT is sold.
         address tokenOwner;
-        // The address of the current highest bid
-        address bidder;
-        //Amout of highest bid price
-        uint96 amount;
     }
 
-    uint256 feeNumerator;
+    struct BidStatus {
+        mapping(address => bool) _status;
+    }
+
+    uint96 public feeNumerator;
+    uint96 public feeDiscountNumerator;
     address public feeTo;
+    uint256 public ticketFee;
+    IERC20 public specifiedStakeToken;
     mapping(uint256 => Auction) public auctionData;
+    mapping(uint256 => bool) public discounts;
     mapping(uint256 => IterableOrderedOrderSet.Data) internal sellOrders;
+    mapping(uint256 => BidStatus) isBid;
 
-    constructor() public Pausable() {
-    }
+
+    constructor() public Pausable() {}
 
     /**
      * @notice Call this function only 1 time to init value for variable
@@ -172,17 +178,98 @@ contract NFTAuction is Pausable {
 
     /**
      * @notice Auction owner must pay some fee for this contract owner
-     * @dev set feeTo address, can only call by owner
+     * @dev can only call by owner
      */
-    function setFeeParameters(uint256 newFeeNumerator)
+    function setFeeParameters(uint96 _newFeeNumerator)
     public
     onlyOwner {
         require(
-            newFeeNumerator <= 15,
-            "Fee is not allowed to be set higher than 1.5%"
+            _newFeeNumerator <= 15,
+            "Fee is not allowed to be set higher than 1,5%"
         );
 
-        feeNumerator = newFeeNumerator;
+        feeNumerator = _newFeeNumerator;
+    }
+
+    /**
+     * @notice Auction owner must pay some fee for this contract owner - fee when discount
+     * @dev can only call by owner
+     */
+    function setFeeDiscountParameters(uint96 _newFeeNumerator)
+    public
+    onlyOwner {
+        require(
+            _newFeeNumerator <= 10,
+            "Fee is not allowed to be set higher than 1%"
+        );
+
+        feeDiscountNumerator = _newFeeNumerator;
+    }
+
+    /**
+     * @notice set ERC20 token user must pay when bid an auction
+     * @dev can only call by owner
+     */
+    function setSpecifiedStakeToken(address _tokenAddress)
+    public
+    onlyOwner {
+
+        specifiedStakeToken = IERC20(_tokenAddress);
+    }
+
+    /**
+     * @notice set ERC20 token fee user must pay when bid an auction
+     * @dev can only call by owner
+     */
+    function setSpecifiedStakeTokenFee(uint256 _fee)
+    public
+    onlyOwner {
+
+        ticketFee = _fee;
+    }
+
+    /**
+     * @notice Contract owner can set some Auction as Discount mean Auction owner only pay smaller than other
+     * @dev can only call by owner
+     */
+    function addDiscount(uint256 _auctionId)
+    external
+    onlyOwner {
+        discounts[_auctionId] = true;
+    }
+
+    /**
+     * @notice Remove auction from auctions discount group
+     * @dev can only call by owner
+     */
+    function removeDiscount(uint256 _auctionId)
+    external
+    onlyOwner {
+        discounts[_auctionId] = false;
+    }
+
+    /**
+     * @notice See an auctions is discount or not
+     * @dev call from anyWhere with anyone
+     */
+    function getDiscountStatus(uint256 _auctionId)
+    public
+    view
+    returns(bool) {
+        return discounts[_auctionId];
+    }
+
+    /**
+     * @notice Withdraw ticket fee
+     * @dev call only by onwner
+     */
+    function withDrawTicketFee(uint256 _amount)
+    public {
+
+        IERC20(specifiedStakeToken).transfer(
+            feeTo,
+            _amount
+        );
     }
 
     /**
@@ -234,9 +321,7 @@ contract NFTAuction is Pausable {
             init_last_element,
             reservePrice,
             minBidIncrementPerOrder,
-            tokenOwner,
-            address(0),
-            0
+            tokenOwner
         );
 
         IERC721(tokenContract).transferFrom(tokenOwner, address(this), tokenId);
@@ -257,6 +342,12 @@ contract NFTAuction is Pausable {
         return auctionId;
     }
 
+    /**
+    * @notice Create a bid to an auction.
+    * @param {auctionId, amount}
+    * @dev Create bid to an exists Auction and must higer than last bid
+    */
+
     function createBid(uint256 auctionId, uint256 amount)
     external
     whenNotPaused
@@ -271,10 +362,26 @@ contract NFTAuction is Pausable {
             'Must send at least reservePrice'
         );
 
+        (
+            ,
+            uint96 _amount
+        ) = auctionData[auctionId].last_element.decodeOrder();
+
         require(
-            amount >= auctionData[auctionId].amount.add(auctionData[auctionId].minBidIncrementPerOrder),
+            amount >= _amount.add(auctionData[auctionId].minBidIncrementPerOrder),
             'Must send more than last bid by minBidIncrementPercentage amount'
         );
+
+        if(!isBid[auctionId]._status[msg.sender]) {
+
+            isBid[auctionId]._status[msg.sender] = true;
+
+            specifiedStakeToken.transferFrom(
+                msg.sender,
+                address(this),
+                ticketFee
+            );
+        }
 
         bytes32 _currentEncode = IterableOrderedOrderSet.encodeOrder(msg.sender, amount.toUint96());
 
@@ -285,8 +392,7 @@ contract NFTAuction is Pausable {
             )
         )
         {
-            auctionData[auctionId].amount = amount.toUint96();
-            auctionData[auctionId].bidder = msg.sender;
+
             auctionData[auctionId].last_element = _currentEncode;
 
             auctionData[auctionId].ERC20Address.transferFrom(
@@ -335,6 +441,7 @@ contract NFTAuction is Pausable {
     function cancelAllBid(uint256 auctionId)
     public
     whenNotPaused
+    nonReentrant
     auctionExists(auctionId)
     OnGoingAuctionRequired(auctionId)
     returns(bool) {
@@ -416,6 +523,7 @@ contract NFTAuction is Pausable {
     function cancelAuctionWhenOngoing(uint256 auctionId)
     external
     whenNotPaused
+    nonReentrant
     auctionExists(auctionId)
     OnGoingAuctionRequired(auctionId) {
         require(
@@ -436,11 +544,12 @@ contract NFTAuction is Pausable {
     function endAuction(uint256 auctionId)
     external
     whenNotPaused
+    nonReentrant
     auctionExists(auctionId)
     {
         require(
             auctionData[auctionId].tokenOwner == msg.sender ||
-            (_tooLongAuction(auctionId) && isOwner()) ,
+            (_tooLongAuction(auctionId) && isOwner()),
             "Not authorized"
         );
 
@@ -454,35 +563,37 @@ contract NFTAuction is Pausable {
             "Action haven't ended"
         );
 
-        uint256 _fee;
-        address winner = auctionData[auctionId].bidder;
+        uint96 _fee;
+        uint96 _feeNumerator;
+        IERC20 _rewardToken = auctionData[auctionId].ERC20Address;
+        address _erc721Token = auctionData[auctionId].tokenContract;
+        uint256 _erc721Id = auctionData[auctionId].tokenId;
         address _tokenOwner = auctionData[auctionId].tokenOwner;
-        uint256 winAmount = auctionData[auctionId].amount;
         bytes32 _last_element = auctionData[auctionId].last_element;
 
+        (
+                address winner,
+                uint96 winAmount
+
+            ) = _last_element.decodeOrder();
+
+        // fee depends on this auction is discont or not
+        if(discounts[auctionId]) {
+            _feeNumerator = feeNumerator;
+        }
+        else {
+            _feeNumerator = feeDiscountNumerator;
+        }
+
+        // caculate fee
         if(feeTo != address(0)) {
-            _fee = winAmount.mul(feeNumerator)
-                            .div(FEE_DENOMINATOR);
+            _fee = winAmount.mul(_feeNumerator)
+                            .div(FEE_DENOMINATOR)
+                            .toUint96();
         }
 
-        winAmount = winAmount.sub(_fee);
-        auctionData[auctionId].ERC20Address.transfer(
-                _tokenOwner,
-                winAmount
-            );
-
-        IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(
-                address(this),
-                winner,
-                auctionData[auctionId].tokenId
-            );
-
-        if(_fee != 0) {
-            auctionData[auctionId].ERC20Address.transfer(
-                feeTo,
-                _fee
-            );
-        }
+        // amount token will transfer for winner
+        winAmount = winAmount.sub(_fee).toUint96();
 
         // remove winner from pay back list
         auctionData[auctionId].last_element = sellOrders[auctionId].prev(_last_element);
@@ -490,23 +601,48 @@ contract NFTAuction is Pausable {
         // pay back list: return ERC20 for lost bidder list
         bool success = _forceCancelAllBid(auctionId);
 
-        if(!success) revert('Bid order to remove has wrong infomation');
-
         // delete auction informations
         delete auctionData[auctionId];
         delete sellOrders[auctionId];
+        delete isBid[auctionId];
+
+        _rewardToken.transfer(
+                _tokenOwner,
+                winAmount
+            );
+
+        IERC721(_erc721Token).safeTransferFrom(
+                address(this),
+                winner,
+                _erc721Id
+            );
+
+        if(_fee != 0) {
+            _rewardToken.transfer(
+                feeTo,
+                _fee
+            );
+        }
+
+        if(!success) revert('Bid order to remove has wrong infomation');
 
         emit AuctionEnded(auctionId, winner, winAmount);
     }
 
     function _cancelAuction(uint256 auctionId)
     internal {
-        address tokenOwner = auctionData[auctionId].tokenOwner;
-        IERC721(auctionData[auctionId].tokenContract).safeTransferFrom(address(this), tokenOwner, auctionData[auctionId].tokenId);
 
-        emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
+        address tokenOwner = auctionData[auctionId].tokenOwner;
+        address tokenContract = auctionData[auctionId].tokenContract;
+        uint256 tokenId = auctionData[auctionId].tokenId;
+
         delete sellOrders[auctionId];
         delete auctionData[auctionId];
+        delete isBid[auctionId];
+
+        IERC721(tokenContract).safeTransferFrom(address(this), tokenOwner, tokenId);
+
+        emit AuctionCanceled(auctionId, auctionData[auctionId].tokenId, auctionData[auctionId].tokenContract, tokenOwner);
     }
 
     function _setDurationAuction(uint256 auctionId, uint256 duration)
@@ -541,8 +677,8 @@ contract NFTAuction is Pausable {
     internal
     returns(bool) {
 
-        bool success = sellOrders[auctionId].removeKeepHistory(_orderInfo);
         bytes32 _last_element = auctionData[auctionId].last_element;
+        bool success = sellOrders[auctionId].removeKeepHistory(_orderInfo);
         if(success) {
             (
                 address _userAddress,
@@ -552,15 +688,8 @@ contract NFTAuction is Pausable {
             require(_userAddress == msg.sender, 'Only the user can cancel their orders');
 
             if(_orderInfo == _last_element) {
+
                 auctionData[auctionId].last_element = sellOrders[auctionId].prev(_last_element);
-
-                (
-                    address _currentAddress,
-                    uint96 _currentAmount
-                ) = auctionData[auctionId].last_element.decodeOrder();
-
-                auctionData[auctionId].bidder = _currentAddress;
-                auctionData[auctionId].amount = _currentAmount;
             }
 
             auctionData[auctionId].ERC20Address.transfer(
