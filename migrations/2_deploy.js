@@ -8,11 +8,12 @@ module.exports = async function (deployer) {
   await deployer.link(library, Auction);
   await deployer.deploy(Auction);
 
-  const auctionAddress = await Auction.deployed();
+  const auction = await Auction.deployed();
+  await auction.initialize();
 
   /**
     * keccak256(initialize()) = 0x8129fc1c
     * @dev run initialize() function one time when deploy proxy contract
   */
-  await deployer.deploy(Proxy, auctionAddress.address, 0x8129fc1c);
+  await deployer.deploy(Proxy, auction.address, 0x8129fc1c);
 };

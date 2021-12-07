@@ -3,8 +3,9 @@
 pragma solidity ^0.8.0;
 
 import "./OwnAble.sol";
+import "../library/ReentrancyGuard.sol";
 
-contract SampleProxy is Ownable {
+contract SampleProxy is ReentrancyGuard, Ownable {
     
     constructor (address _logic, bytes memory _data) public payable  {
         assert(_IMPLEMENTATION_SLOT == bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1));

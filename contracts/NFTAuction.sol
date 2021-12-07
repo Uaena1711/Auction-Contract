@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "./PausAble.sol";
 import "../library/OrderAuctionList.sol";
 import "../library/SafeCast.sol";
+import "../library/ReentrancyGuard.sol";
 import "../node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC721, IERC165 } from "../node_modules/@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "../node_modules/@openzeppelin/contracts/utils/math/SafeMath.sol";
@@ -11,7 +12,7 @@ import "../node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol"
 import { Counters } from "../node_modules/@openzeppelin/contracts/utils/Counters.sol";
 
 
-contract NFTAuction is Pausable {
+contract NFTAuction is ReentrancyGuard, Pausable {
 
     using SafeERC20 for IERC20;
     using SafeMath for uint64;
@@ -24,7 +25,7 @@ contract NFTAuction is Pausable {
 
     bool private initialized;
     bool private initializing;
-    uint96 private FEE_DENOMINATOR;
+    uint16 private FEE_DENOMINATOR;
 
     bytes4 private interfaceId; // 721 interface id
 
@@ -259,6 +260,19 @@ contract NFTAuction is Pausable {
     }
 
     /**
+     * @notice Withdraw ticket fee
+     * @dev call only by onwner
+     */
+    function withDrawTicketFee(uint256 _amount)
+    public {
+
+        IERC20(specifiedStakeToken).transfer(
+            feeTo,
+            _amount
+        );
+    }
+
+    /**
      * @notice Create an auction.
      * @dev Store the auction details in the auctions mapping and emit an AuctionCreated event.
      */
@@ -427,6 +441,7 @@ contract NFTAuction is Pausable {
     function cancelAllBid(uint256 auctionId)
     public
     whenNotPaused
+    nonReentrant
     auctionExists(auctionId)
     OnGoingAuctionRequired(auctionId)
     returns(bool) {
@@ -508,6 +523,7 @@ contract NFTAuction is Pausable {
     function cancelAuctionWhenOngoing(uint256 auctionId)
     external
     whenNotPaused
+    nonReentrant
     auctionExists(auctionId)
     OnGoingAuctionRequired(auctionId) {
         require(
@@ -528,6 +544,7 @@ contract NFTAuction is Pausable {
     function endAuction(uint256 auctionId)
     external
     whenNotPaused
+    nonReentrant
     auctionExists(auctionId)
     {
         require(
